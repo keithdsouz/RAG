@@ -1,0 +1,14 @@
+# Secrets and local config
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local OpenSearch install and its data (about 1 GB)
+local-opensearch/
+
+# Editor
+.vscode/

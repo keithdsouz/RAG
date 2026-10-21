@@ -1,0 +1,12 @@
+# Core RAG pipeline
+langchain-core
+langchain-text-splitters
+
+# LLM providers for --generate (install the one you use; the other is only imported on demand)
+langchain-anthropic
+langchain-openai
+
+# Optional: extra file and database formats
+# pypdf          (.pdf)
+# python-docx    (.docx)
+# sqlalchemy     (databases other than SQLite)

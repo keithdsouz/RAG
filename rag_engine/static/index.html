@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local RAG Search</title>
+  <style>
+    :root { --accent: #2563eb; --border: #d4d4d8; --muted: #6b7280; --bg: #f8fafc; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: var(--bg); color: #111827; margin: 0; }
+    main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+    h1 { margin: 0 0 4px; font-size: 1.5rem; }
+    h2 { font-size: 1.05rem; margin: 0 0 12px; }
+    .sub { color: var(--muted); margin: 0 0 24px; }
+    section { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 18px; }
+    #drop { border: 2px dashed var(--border); border-radius: 8px; padding: 28px; text-align: center; color: var(--muted); cursor: pointer; }
+    #drop.over { border-color: var(--accent); background: #eff6ff; color: var(--accent); }
+    button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 16px; font-size: .95rem; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    input[type=text], input[type=number] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: .95rem; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .grow { flex: 1; min-width: 200px; }
+    ul { list-style: none; padding: 0; margin: 12px 0 0; }
+    li.file { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f1f5f9; font-size: .92rem; }
+    .muted { color: var(--muted); }
+    .ok { color: #15803d; } .err { color: #b91c1c; }
+    .hit { border-top: 1px solid #f1f5f9; padding: 12px 0; }
+    .hit:first-child { border-top: 0; }
+    .hit .meta { font-size: .8rem; color: var(--muted); margin-bottom: 4px; word-break: break-all; }
+    .badge { display: inline-block; font-size: .72rem; padding: 1px 7px; border-radius: 99px; background: #e0e7ff; color: #3730a3; margin-right: 6px; }
+    .title { font-weight: 600; }
+    #answer { white-space: pre-wrap; background: #f1f5f9; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    pre.summary { background: #f1f5f9; border-radius: 8px; padding: 10px; font-size: .82rem; overflow: auto; margin: 12px 0 0; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Local RAG Search</h1>
+  <p class="sub">Upload files, index them, then search. Everything runs on this machine.</p>
+
+  <section>
+    <h2>1. Upload files</h2>
+    <div id="drop">Drop files here or click to choose<br><span class="muted" id="types"></span></div>
+    <input id="picker" type="file" multiple hidden>
+    <div id="uploadStatus" class="muted" style="margin-top:10px"></div>
+    <div class="muted" style="margin-top:10px">Saved in: <code id="dir">…</code></div>
+    <ul id="files"></ul>
+  </section>
+
+  <section>
+    <h2>2. Index</h2>
+    <div class="row">
+      <label for="indexName">Index name</label>
+      <input id="indexName" type="text" value="uploads" list="indexList" style="width:160px">
+      <datalist id="indexList"></datalist>
+      <button id="indexBtn">Index uploaded files</button>
+      <span id="indexStatus" class="muted"></span>
+    </div>
+    <p id="existing" class="muted" style="margin:10px 0 0"></p>
+    <p class="muted" style="margin:10px 0 0">Indexing rebuilds the whole index from the folder above. Re-run it after uploading new files.</p>
+    <pre id="summary" class="summary" hidden></pre>
+  </section>
+
+  <section>
+    <h2>3. Search</h2>
+    <form id="searchForm" class="row">
+      <input id="query" class="grow" type="text" placeholder="Ask a question…" autocomplete="off">
+      <label>Results <input id="topK" type="number" value="5" min="1" max="20" style="width:64px"></label>
+      <label><input id="generate" type="checkbox"> LLM answer</label>
+      <button id="searchBtn">Search</button>
+    </form>
+    <div id="searchStatus" class="muted" style="margin:10px 0"></div>
+    <div id="answer" hidden></div>
+    <div id="results"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const HEADERS = { 'X-Requested-With': 'rag-ui' };
+const ALLOWED = ['.txt','.md','.csv','.json','.xml','.html','.htm','.pdf','.docx','.py','.js','.ts','.java','.sql','.yaml','.yml','.log'];
+$('types').textContent = 'e.g. ' + ALLOWED.join(' ');
+
+const fmtSize = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+
+async function api(path, options = {}) {
+  const response = await fetch(path, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.message || body.error || ('HTTP ' + response.status));
+  return body;
+}
+
+async function loadFiles() {
+  const data = await api('/files');
+  $('dir').textContent = data.directory;
+  const list = $('files');
+  list.replaceChildren();
+  if (!data.files.length) {
+    const empty = document.createElement('li');
+    empty.className = 'muted';
+    empty.textContent = 'No files yet.';
+    list.append(empty);
+  }
+  for (const file of data.files) {
+    const item = document.createElement('li');
+    item.className = 'file';
+    const name = document.createElement('span');
+    name.textContent = file.name;
+    const size = document.createElement('span');
+    size.className = 'muted';
+    size.textContent = fmtSize(file.size);
+    item.append(name, size);
+    list.append(item);
+  }
+}
+
+async function loadIndexes() {
+  const { indexes } = await api('/indexes');
+  const list = $('indexList');
+  list.replaceChildren();
+  for (const index of indexes) {
+    const option = document.createElement('option');
+    option.value = index.name;
+    list.append(option);
+  }
+  $('existing').textContent = indexes.length
+    ? 'Existing indexes: ' + indexes.map((index) => index.name + ' (' + index.chunks + ' chunks)').join(', ') + '. Type or pick one to search it.'
+    : 'No indexes yet. Upload files and click Index to create one.';
+}
+
+async function uploadFiles(files) {
+  const status = $('uploadStatus');
+  status.className = 'muted';
+  status.replaceChildren();
+  for (const file of files) {
+    const line = document.createElement('div');
+    line.textContent = 'Uploading ' + file.name + '…';
+    status.append(line);
+    try {
+      const saved = await api('/upload?name=' + encodeURIComponent(file.name), { method: 'POST', headers: HEADERS, body: file });
+      line.className = 'ok';
+      line.textContent = '✓ ' + saved.name + ' (' + fmtSize(saved.size) + ')';
+    } catch (error) {
+      line.className = 'err';
+      line.textContent = '✗ ' + file.name + ': ' + error.message;
+    }
+  }
+  await loadFiles();
+}
+
+const drop = $('drop');
+drop.addEventListener('click', () => $('picker').click());
+$('picker').addEventListener('change', (event) => { uploadFiles([...event.target.files]); event.target.value = ''; });
+['dragenter', 'dragover'].forEach((type) => drop.addEventListener(type, (event) => { event.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((type) => drop.addEventListener(type, (event) => { event.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', (event) => uploadFiles([...event.dataTransfer.files]));
+
+$('indexBtn').addEventListener('click', async () => {
+  const button = $('indexBtn');
+  const status = $('indexStatus');
+  button.disabled = true;
+  status.className = 'muted';
+  status.textContent = 'Indexing…';
+  try {
+    const dir = $('dir').textContent;
+    const summary = await api('/index', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index: $('indexName').value.trim() || 'uploads', sources: [{ type: 'files', path: dir }] }),
+    });
+    status.className = 'ok';
+    status.textContent = '✓ ' + summary.documents_indexed + ' documents, ' + summary.chunks_indexed + ' chunks'
+      + (summary.embedding.enabled ? ' (with embeddings)' : ' (keyword search only)');
+    $('summary').hidden = false;
+    $('summary').textContent = JSON.stringify(summary, null, 2);
+    loadIndexes().catch(() => {});
+  } catch (error) {
+    status.className = 'err';
+    status.textContent = '✗ ' + error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('searchForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const query = $('query').value.trim();
+  if (!query) return;
+  const status = $('searchStatus');
+  $('searchBtn').disabled = true;
+  status.className = 'muted';
+  status.textContent = 'Searching…';
+  $('results').replaceChildren();
+  $('answer').hidden = true;
+  try {
+    const data = await api('/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        index: $('indexName').value.trim() || 'uploads',
+        query,
+        top_k: Number($('topK').value) || 5,
+        generate: $('generate').checked,
+      }),
+    });
+    const mode = data.retrieval.used_semantic ? 'keyword + semantic' : 'keyword only';
+    status.textContent = data.results.length + ' results (' + mode + ')';
+    if (data.answer) { $('answer').hidden = false; $('answer').textContent = data.answer; }
+    for (const hit of data.results) {
+      const card = document.createElement('div');
+      card.className = 'hit';
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = hit.source_type;
+      meta.append(badge, 'score ' + hit.score + ' · ' + hit.uri);
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = hit.title;
+      const snippet = document.createElement('div');
+      snippet.textContent = hit.snippet;
+      card.append(meta, title, snippet);
+      $('results').append(card);
+    }
+  } catch (error) {
+    status.className = 'err';
+    status.textContent = '✗ ' + error.message;
+  } finally {
+    $('searchBtn').disabled = false;
+  }
+});
+
+loadFiles().catch((error) => { $('uploadStatus').textContent = error.message; });
+loadIndexes().catch((error) => { $('existing').textContent = error.message; });
+</script>
+</body>
+</html>

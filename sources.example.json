@@ -1,0 +1,23 @@
+{
+  "sources": [
+    {
+      "type": "files",
+      "path": "./docs"
+    },
+    {
+      "type": "database",
+      "name": "articles",
+      "url": "sqlite:///./data/articles.db",
+      "query": "SELECT id, title, body, author FROM articles",
+      "id_column": "id",
+      "title_column": "title",
+      "text_columns": ["title", "body", "author"]
+    },
+    {
+      "type": "web",
+      "urls": ["https://example.com/docs"],
+      "depth": 1,
+      "max_pages": 20
+    }
+  ]
+}
