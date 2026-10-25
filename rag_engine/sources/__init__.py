@@ -4,7 +4,8 @@ from pathlib import Path
 from .base import Source
 from .database import DatabaseSource
 from .files import FileSource
-from .web import WebSource
+from ..config import RESTRICT_SOURCES, UPLOAD_DIR
+from .web import WebSource, require_public_url
 
 SOURCE_TYPES = {
     FileSource.type: FileSource,
@@ -28,6 +29,24 @@ def build_source(spec: dict) -> Source:
 
 def build_sources(specs: list[dict]) -> list[Source]:
     return [build_source(spec) for spec in specs]
+
+
+def validate_specs(specs: list[dict]) -> None:
+    """In RESTRICT_SOURCES mode, only allow uploaded files and public web pages."""
+    if not RESTRICT_SOURCES:
+        return
+    root = UPLOAD_DIR.resolve()
+    for spec in specs:
+        source_type = spec.get('type')
+        if source_type == 'files':
+            path = Path(str(spec.get('path', ''))).expanduser().resolve()
+            if path != root and root not in path.parents:
+                raise ValueError('Only the upload directory can be indexed on this server.')
+        elif source_type == 'web':
+            for url in spec.get('urls') or []:
+                require_public_url(url)
+        else:
+            raise ValueError(f'Source type "{source_type}" is disabled on this server.')
 
 
 def load_source_specs(config_path: Path) -> list[dict]:

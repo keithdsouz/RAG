@@ -1,0 +1,58 @@
+# Production stack: Caddy (HTTPS) -> app -> OpenSearch. Only ports 80/443 are published.
+#   cp .env.example .env   # set RAG_API_KEY, DOMAIN, LLM/embedding keys
+#   docker compose -f docker-compose.prod.yml up -d --build
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - OPENSEARCH_URL=http://opensearch:9200
+      - UPLOAD_DIR=/data/uploads
+      - RESTRICT_SOURCES=true
+      - RAG_API_KEY=${RAG_API_KEY:?Set RAG_API_KEY in .env}
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      - opensearch
+
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    # No published ports: reachable only from the app on the internal network.
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+
+volumes:
+  uploads:
+  opensearch-data:
+  caddy-data:
+  caddy-config:

@@ -1,22 +1,50 @@
 import argparse
+import base64
+import hmac
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import opensearch_client
-from .config import CHUNK_OVERLAP, CHUNK_SIZE, MAX_UPLOAD_BYTES, UPLOAD_DIR
+from .config import CHUNK_OVERLAP, CHUNK_SIZE, MAX_UPLOAD_BYTES, RAG_API_KEY, UPLOAD_DIR
 from .indexer import build_index
 from .search import search_index
-from .sources import build_sources
+from .sources import build_sources, validate_specs
 from .uploads import UploadError, list_uploads, save_upload
 
 STATIC_DIR = Path(__file__).parent / 'static'
 
 
 class RagRequestHandler(BaseHTTPRequestHandler):
+    def authorized(self) -> bool:
+        if not RAG_API_KEY:
+            return True
+        supplied = self.headers.get('x-api-key', '')
+        header = self.headers.get('authorization', '')
+        if header.lower().startswith('bearer '):
+            supplied = header[7:].strip()
+        elif header.lower().startswith('basic '):
+            try:
+                supplied = base64.b64decode(header[6:]).decode('utf-8').partition(':')[2]
+            except ValueError:
+                supplied = ''
+        return hmac.compare_digest(supplied.encode('utf-8'), RAG_API_KEY.encode('utf-8'))
+
+    def reject_unauthorized(self) -> None:
+        body = json.dumps({'message': 'Authentication required.'}).encode('utf-8')
+        self.send_response(401)
+        self.send_header('www-authenticate', 'Basic realm="RAG search"')
+        self.send_header('content-type', 'application/json')
+        self.send_header('content-length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path != '/health' and not self.authorized():
+            self.reject_unauthorized()
+            return
         if parsed.path in {'/', '/index.html'}:
             self.respond_html((STATIC_DIR / 'index.html').read_bytes())
             return
@@ -36,6 +64,9 @@ class RagRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if not self.authorized():
+            self.reject_unauthorized()
+            return
 
         if parsed.path == '/upload':
             self.handle_upload(parsed)
@@ -50,6 +81,7 @@ class RagRequestHandler(BaseHTTPRequestHandler):
                     specs.append({'type': 'files', 'path': payload['path']})
                 if not specs:
                     raise KeyError('sources')
+                validate_specs(specs)
                 summary = build_index(
                     name=payload.get('index', 'default'),
                     sources=build_sources(specs),
@@ -138,6 +170,8 @@ def main() -> None:
     parser.add_argument('--port', type=int, default=8500)
     args = parser.parse_args()
 
+    if args.host not in {'localhost', '127.0.0.1', '::1'} and not RAG_API_KEY:
+        print('WARNING: listening on a non-local address without RAG_API_KEY; anyone who can reach it can use it.')
     server = ThreadingHTTPServer((args.host, args.port), RagRequestHandler)
     print(f'RAG search API listening on http://{args.host}:{args.port}')
     server.serve_forever()

@@ -62,6 +62,13 @@ OPENSEARCH_REQUEST_TIMEOUT = int(os.getenv('OPENSEARCH_REQUEST_TIMEOUT', '30'))
 KNN_ENGINE = os.getenv('KNN_ENGINE') or ('lucene' if os.name == 'nt' else 'nmslib')
 OPENSEARCH_BULK_BATCH =int(os.getenv('OPENSEARCH_BULK_BATCH', '200'))
 
+# Deployment hardening. With RAG_API_KEY set, every endpoint except /health requires it
+# (Bearer token, X-API-Key header, or the password of HTTP Basic auth so browsers get a login prompt).
+# With RESTRICT_SOURCES on, /index only reads UPLOAD_DIR and public http(s) URLs (no arbitrary paths,
+# no databases, no private/loopback addresses).
+RAG_API_KEY = os.getenv('RAG_API_KEY', '')
+RESTRICT_SOURCES = os.getenv('RESTRICT_SOURCES', 'false').lower() in {'1', 'true', 'yes'}
+
 MAX_FILE_BYTES = int(os.getenv('MAX_FILE_BYTES', str(25 * 1024 * 1024)))
 
 UPLOAD_DIR = Path(os.getenv('UPLOAD_DIR') or Path.home() / 'Desktop' / 'rag_sample_data' / 'docs')

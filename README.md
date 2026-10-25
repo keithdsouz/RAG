@@ -195,3 +195,25 @@ rag_engine/
 ## Notes
 
 This is a local retrieval engine with OpenSearch retrieval and optional OpenAI-compatible embeddings + LLM generation. Keep `generate=false` for retrieval-only search, or set `generate=true` when an approved model endpoint is configured.
+
+## Deploying For Others
+
+`docker-compose.prod.yml` runs Caddy (automatic HTTPS), the app and OpenSearch on one VM. Only ports 80/443 are exposed; OpenSearch stays on the internal network.
+
+```bash
+cp .env.example .env
+# set RAG_API_KEY (openssl rand -hex 32), DOMAIN, and your LLM / embedding settings
+# for Ollama on the host use EMBEDDING_API_URL=http://host.docker.internal:11434/v1/embeddings
+# (or leave EMBEDDING_ENABLED=false for keyword-only search)
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Point your domain's DNS at the VM and open ports 80 and 443. Users open `https://<DOMAIN>/` and sign in with any username and `RAG_API_KEY` as the password; API clients send `Authorization: Bearer <key>`. Give the VM at least 4 GB RAM (OpenSearch uses a 1 GB heap).
+
+Hardening applied in this mode:
+
+- `RAG_API_KEY` is required on every endpoint except `/health`.
+- `RESTRICT_SOURCES=true` limits `/index` to the upload directory and public web pages; arbitrary filesystem paths, database sources, and private/loopback/link-local URLs (including via redirects) are rejected.
+- Uploads and the OpenSearch index live in Docker volumes.
+
+Everyone who has the key shares the same indexes and uploads; this is not per-user access control.

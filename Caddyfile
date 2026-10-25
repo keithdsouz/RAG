@@ -1,0 +1,9 @@
+# Caddy terminates HTTPS (automatic Let's Encrypt certificate) and proxies to the app.
+# Set DOMAIN in .env to your hostname; use "localhost" to test locally.
+{$DOMAIN:localhost} {
+	encode gzip
+	request_body {
+		max_size 60MB
+	}
+	reverse_proxy app:8500
+}
